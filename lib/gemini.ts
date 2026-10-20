@@ -69,16 +69,21 @@ Activity object shape:
   "title": string,              // max 150 chars — name of place/activity
   "description": string,        // 1–2 sentence description
   "location_name": string,      // specific neighbourhood or address area
-  "estimated_cost": number,     // in PKR per person
+  "estimated_cost": number,     // in PKR per person (MUST BE POSITIVE NON-ZERO, e.g. 800, 1500, 3000)
   "category": "sightseeing" | "food" | "travel" | "leisure",
   "order_index": number         // 0-indexed within the time slot
 }
 
 3. Each day must have at least 1 activity per slot (morning, afternoon, evening).
 4. Activities must reflect the traveller's interests: ${interestsList}.
-5. All costs MUST be realistic for ${req.destination} at the ${req.budgetTier} tier in PKR.
-6. budget.total_estimated_cost must equal the sum of all five budget line items.
-7. Do NOT include accommodation in activities — keep it separate in the budget.
+5. CRITICAL COST RULE: Assign a realistic, NON-ZERO estimated_cost (in PKR) to EVERY SINGLE activity. NEVER output 0 for estimated_cost.
+   - "food" activities: meals, dining, snacks (e.g. 700 - 3500 PKR depending on tier).
+   - "sightseeing" / "leisure" activities: museum entry, monument ticket, local tour, or guide fee (e.g. 500 - 4500 PKR).
+   - "travel" activities: taxi, jeep hire, boat ride, or transit pass (e.g. 500 - 3000 PKR).
+   - The combined activity costs should logically correlate with the respective category budget totals (food_cost, transport_cost, activities_cost).
+6. All costs MUST be realistic for ${req.destination} at the ${req.budgetTier} tier in PKR.
+7. budget.total_estimated_cost must equal the sum of all five budget line items (accommodation_cost + food_cost + transport_cost + activities_cost + misc_cost).
+8. Do NOT include accommodation in activities — keep it separate in the budget.
 
 Generate the itinerary now:`;
 }

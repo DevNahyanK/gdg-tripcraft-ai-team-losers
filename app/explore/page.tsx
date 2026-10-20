@@ -1,13 +1,18 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import Navbar from "@/components/Navbar";
+import { createClient } from "@/utils/supabase/client";
 import {
   MapPin,
   Clock,
   Wallet,
   Tags,
   Sparkles,
+  Compass,
   ChevronRight,
   Loader2,
   AlertCircle,
@@ -33,6 +38,10 @@ import {
   Calendar,
   TrendingUp,
   Search,
+  CheckCircle2,
+  LayoutDashboard,
+  Lock,
+  X,
 } from "lucide-react";
 import type { GeneratedItinerary } from "@/lib/schemas";
 
@@ -149,13 +158,70 @@ function formatCost(n: number) {
   return `PKR ${n.toLocaleString("en-PK")}`;
 }
 
+/**
+ * Ensures activities always display a realistic non-zero cost.
+ * If Gemini returned 0 or undefined, calculates a dynamic fallback
+ * based on the itinerary's category budget and the time slot.
+ */
+function getActivityCost(
+  activity: { estimated_cost?: number; category?: string },
+  slot: "morning" | "afternoon" | "evening",
+  budget?: {
+    food_cost?: number;
+    activities_cost?: number;
+    transport_cost?: number;
+    total_estimated_cost?: number;
+  },
+  durationDays: number = 3
+): number {
+  if (typeof activity.estimated_cost === "number" && activity.estimated_cost > 0) {
+    return activity.estimated_cost;
+  }
+
+  const days = Math.max(1, durationDays);
+  const category = activity.category || "sightseeing";
+
+  if (category === "food" && budget?.food_cost && budget.food_cost > 0) {
+    const dailyFood = budget.food_cost / days;
+    const factor = slot === "morning" ? 0.25 : slot === "evening" ? 0.4 : 0.35;
+    return Math.max(500, Math.round((dailyFood * factor) / 50) * 50);
+  }
+
+  if (category === "travel" && budget?.transport_cost && budget.transport_cost > 0) {
+    const dailyTransport = budget.transport_cost / days;
+    const factor = slot === "afternoon" ? 0.4 : 0.3;
+    return Math.max(400, Math.round((dailyTransport * factor) / 50) * 50);
+  }
+
+  if (
+    (category === "sightseeing" || category === "leisure") &&
+    budget?.activities_cost &&
+    budget.activities_cost > 0
+  ) {
+    const dailyActivities = budget.activities_cost / days;
+    const factor = slot === "afternoon" ? 0.45 : slot === "morning" ? 0.35 : 0.2;
+    return Math.max(500, Math.round((dailyActivities * factor) / 50) * 50);
+  }
+
+  // Base slot/category sensible defaults if category budget wasn't granular
+  const baseDefaults: Record<string, Record<string, number>> = {
+    morning: { food: 950, sightseeing: 1200, travel: 600, leisure: 800 },
+    afternoon: { food: 1600, sightseeing: 2200, travel: 900, leisure: 1400 },
+    evening: { food: 2400, sightseeing: 1500, travel: 800, leisure: 1800 },
+  };
+
+  return baseDefaults[slot]?.[category] ?? 1200;
+}
+
 // ─── Form Component ───────────────────────────────────────────────────────────
 interface ExploreFormProps {
   onGenerate: (itinerary: GeneratedItinerary) => void;
 }
 
 function ExploreForm({ onGenerate }: ExploreFormProps) {
-  const [destination, setDestination] = useState("");
+  const searchParams = useSearchParams();
+  const initialDest = searchParams.get("destination") || "";
+  const [destination, setDestination] = useState(initialDest);
   const [showDropdown, setShowDropdown] = useState(false);
   const [durationDays, setDurationDays] = useState(3);
   const [budgetTier, setBudgetTier] = useState<"budget" | "moderate" | "luxury">("moderate");
@@ -164,6 +230,13 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
   const [error, setError] = useState<string | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const paramDest = searchParams.get("destination");
+    if (paramDest) {
+      setDestination(paramDest);
+    }
+  }, [searchParams]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -243,12 +316,12 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
           transition={{ delay: 0.1, duration: 0.5 }}
-          className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass border-blue-500/30 text-blue-300 text-xs font-semibold mb-5"
+          className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass border border-white/10 text-slate-300 text-xs font-semibold mb-5"
         >
-          <Sparkles size={12} />
-          AI-Powered Planning
+          <Compass size={12} className="text-cyan-400" />
+          Interactive Trip Planning
         </motion.div>
-        <h1 className="text-4xl sm:text-5xl font-black text-white mb-3 tracking-tight">
+        <h1 className="text-3xl xs:text-4xl sm:text-5xl font-black text-white mb-3 tracking-tight">
           Where to{" "}
           <span className="shimmer-text">next?</span>
         </h1>
@@ -434,7 +507,7 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
             <Wallet size={13} className="text-cyan-400" />
             Budget Tier
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 xs:grid-cols-3 gap-3">
             {BUDGET_TIERS.map((tier) => {
               const isSelected = budgetTier === tier.id;
               return (
@@ -442,7 +515,7 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
                   key={tier.id}
                   type="button"
                   onClick={() => setBudgetTier(tier.id)}
-                  className={`relative flex flex-col items-center gap-2 p-4 rounded-xl border transition-all duration-200 overflow-hidden ${
+                  className={`relative flex flex-col xs:flex-col items-center gap-2 p-3 xs:p-4 rounded-xl border transition-all duration-200 overflow-hidden ${
                     isSelected
                       ? `${tier.border} ring-2 ${tier.ring} scale-[1.03] bg-white/5`
                       : "border-white/10 bg-white/3 hover:bg-white/5 hover:border-white/20"
@@ -639,11 +712,65 @@ interface ItineraryViewProps {
 
 function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
   const [activeDay, setActiveDay] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [savedTripId, setSavedTripId] = useState<string | null>(null);
 
   const day = itinerary.days[activeDay];
   const { budget } = itinerary;
 
   const budgetMeta = BUDGET_TIERS.find((b) => b.id === itinerary.budget_tier)!;
+
+  const handleSaveTrip = async () => {
+    try {
+      setSaveStatus("saving");
+      setSaveError(null);
+
+      // 1. Client-side auth check
+      try {
+        const supabase = createClient();
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setSaveStatus("idle");
+          setShowAuthModal(true);
+          return;
+        }
+      } catch {
+        // Fall back to server auth verification
+      }
+
+      // 2. Call save API
+      const res = await fetch("/api/trips/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(itinerary),
+      });
+
+      if (res.status === 401) {
+        setSaveStatus("idle");
+        setShowAuthModal(true);
+        return;
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to save trip.");
+      }
+
+      setSaveStatus("saved");
+      setSavedTripId(data.tripId);
+      setShowToast(true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error saving trip.";
+      setSaveError(msg);
+      setSaveStatus("error");
+    }
+  };
 
   return (
     <motion.div
@@ -653,38 +780,108 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
       exit="exit"
       className="w-full max-w-4xl mx-auto"
     >
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between gap-4 mb-8">
-        <div>
+      {/* ── Sub-Navigation & Quick Action Bar ── */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-6 mb-6 border-b border-white/10">
+        {/* Left: Back / Reset navigation & dashboard link */}
+        <div className="flex items-center gap-2">
           <button
             onClick={onReset}
-            className="inline-flex items-center gap-1.5 text-slate-400 hover:text-white text-sm font-medium transition-colors mb-3"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl glass border border-white/10 hover:border-white/20 text-slate-200 hover:text-white hover:bg-white/10 text-xs font-semibold transition-all group"
           >
-            <ArrowLeft size={14} />
-            New Itinerary
+            <ArrowLeft size={14} className="group-hover:-translate-x-0.5 transition-transform" />
+            <span>New Itinerary</span>
           </button>
-          <h1 className="text-3xl sm:text-4xl font-black text-white leading-tight">
-            {itinerary.destination}
-          </h1>
-          <div className="flex flex-wrap items-center gap-3 mt-2">
-            <span className="flex items-center gap-1.5 text-slate-400 text-sm">
-              <Calendar size={13} className="text-cyan-400" />
-              {itinerary.duration_days} days
-            </span>
-            <span
-              className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${budgetMeta.bg} ${budgetMeta.border} border`}
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-white/5 text-xs font-medium transition-colors"
+          >
+            <LayoutDashboard size={13} className="text-cyan-400" />
+            <span>Dashboard</span>
+          </Link>
+        </div>
+
+        {/* Right: Save trip / Saved state */}
+        <div className="flex items-center gap-2">
+          {saveStatus === "saved" ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs sm:text-sm font-bold">
+                <CheckCircle2 size={16} className="text-emerald-400" />
+                <span>Trip Saved!</span>
+              </span>
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5"
+              >
+                <span>View in Dashboard &rarr;</span>
+              </Link>
+            </div>
+          ) : (
+            <button
+              onClick={handleSaveTrip}
+              disabled={saveStatus === "saving"}
+              className="glow-btn inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs sm:text-sm font-bold text-white transition-all disabled:opacity-60 shadow-lg shadow-blue-500/20"
             >
-              <span>{budgetMeta.icon}</span>
-              {budgetMeta.label}
+              {saveStatus === "saving" ? (
+                <>
+                  <Loader2 size={15} className="animate-spin" />
+                  <span>Saving Trip…</span>
+                </>
+              ) : (
+                <>
+                  <Star size={14} />
+                  <span>Save Trip</span>
+                </>
+              )}
+            </button>
+          )}
+          {saveError && (
+            <span className="text-xs text-rose-400 ml-2">
+              {saveError}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Itinerary Hero Header ── */}
+      <div className="glass rounded-3xl p-6 sm:p-8 mb-8 border border-white/10 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none -z-10" />
+
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div>
+            <div className="flex flex-wrap items-center gap-2.5 mb-3">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-white/5 border border-white/10 text-slate-300">
+                <MapPin size={12} className="text-cyan-400" />
+                Customized Itinerary
+              </span>
+              <span
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold ${budgetMeta.bg} ${budgetMeta.border} border`}
+              >
+                <span>{budgetMeta.icon}</span>
+                {budgetMeta.label} Tier
+              </span>
+            </div>
+
+            <h1 className="text-2xl xs:text-3xl sm:text-5xl font-black text-white tracking-tight leading-tight">
+              {itinerary.destination}
+            </h1>
+
+            <div className="flex items-center gap-4 mt-3 text-sm text-slate-400">
+              <span className="flex items-center gap-1.5">
+                <Calendar size={14} className="text-cyan-400" />
+                {itinerary.duration_days} Days Customized Schedule
+              </span>
+            </div>
+          </div>
+
+          <div className="text-left md:text-right p-4 rounded-2xl bg-white/5 border border-white/10 flex-shrink-0">
+            <span className="text-xs uppercase font-bold text-slate-400 block tracking-wider mb-1">
+              Estimated Total Budget
+            </span>
+            <span className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-400">
+              {formatCost(budget.total_estimated_cost)}
             </span>
           </div>
         </div>
-
-        {/* Save button placeholder */}
-        <button className="glow-btn flex-shrink-0 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white">
-          <Star size={14} />
-          Save Trip
-        </button>
       </div>
 
       {/* ── Budget Overview ── */}
@@ -819,6 +1016,13 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
                     {activities.map((act, ai) => {
                       const CatIcon = CATEGORY_ICONS[act.category] ?? Sparkles;
                       const catColor = CATEGORY_COLORS[act.category] ?? "text-slate-400 bg-white/5";
+                      const displayCost = getActivityCost(
+                        act,
+                        slot,
+                        itinerary.budget,
+                        itinerary.duration_days
+                      );
+
                       return (
                         <motion.div
                           key={ai}
@@ -841,7 +1045,7 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
                                 {act.title}
                               </h4>
                               <span className="flex-shrink-0 text-xs font-semibold text-emerald-400">
-                                {formatCost(act.estimated_cost)}
+                                {formatCost(displayCost)}
                               </span>
                             </div>
                             {act.location_name && (
@@ -866,6 +1070,94 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
           </motion.div>
         </motion.div>
       </AnimatePresence>
+
+      {/* ── Success Toast Notification ── */}
+      <AnimatePresence>
+        {showToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 40, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            transition={{ duration: 0.3 }}
+            className="fixed bottom-6 right-6 z-50 max-w-md w-[calc(100%-3rem)] sm:w-auto p-4 rounded-2xl glass border border-emerald-500/40 bg-slate-900/95 shadow-2xl backdrop-blur-xl flex items-center justify-between gap-4"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 size={20} className="text-emerald-400" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-white">Trip saved successfully!</p>
+                <p className="text-xs text-slate-400">
+                  Your itinerary is now stored in your personal dashboard.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/dashboard"
+                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white text-xs font-bold hover:from-blue-500 hover:to-violet-500 shadow-md shadow-blue-500/20 transition-all flex-shrink-0"
+              >
+                Dashboard
+              </Link>
+              <button
+                type="button"
+                onClick={() => setShowToast(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                aria-label="Close notification"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Auth Prompt Modal ── */}
+      <AnimatePresence>
+        {showAuthModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowAuthModal(false)}
+              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md p-6 sm:p-8 rounded-3xl glass border border-white/15 bg-slate-900/95 shadow-2xl z-10 text-center"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/30">
+                <Lock size={22} className="text-white" />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">
+                Sign in to Save Your Trip
+              </h3>
+              <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+                Log in or create a free account to store this customized itinerary in your dashboard, access it from any device, and manage your trips.
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <Link
+                  href="/auth?mode=login&redirect=/explore"
+                  className="w-full py-3.5 rounded-xl font-bold text-white text-sm bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 shadow-lg shadow-blue-500/25 transition-all"
+                >
+                  Sign In / Create Free Account
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setShowAuthModal(false)}
+                  className="w-full py-3 rounded-xl font-semibold text-slate-400 hover:text-white text-sm hover:bg-white/5 transition-colors"
+                >
+                  Continue Browsing
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
@@ -875,24 +1167,32 @@ export default function ExplorePage() {
   const [itinerary, setItinerary] = useState<GeneratedItinerary | null>(null);
 
   return (
-    <main className="min-h-screen bg-[#020510] pt-24 pb-16 px-4">
-      {/* Background */}
-      <div className="fixed inset-0 -z-10">
-        <div className="absolute top-0 left-1/4 w-[500px] h-[500px] rounded-full bg-blue-700/8 blur-[100px]" />
-        <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-violet-700/8 blur-[80px]" />
-      </div>
+    <div className="min-h-screen bg-[#020510] text-slate-100 flex flex-col justify-between noise-overlay">
+      {/* Global Navigation */}
+      <Navbar />
 
-      <AnimatePresence mode="wait">
-        {!itinerary ? (
-          <ExploreForm key="form" onGenerate={setItinerary} />
-        ) : (
-          <ItineraryView
-            key="itinerary"
-            itinerary={itinerary}
-            onReset={() => setItinerary(null)}
-          />
-        )}
-      </AnimatePresence>
-    </main>
+      {/* Main Content Area */}
+      <main className="pt-28 pb-20 px-3 sm:px-4 max-w-7xl mx-auto w-full flex-1">
+        {/* Background Gradients */}
+        <div className="fixed inset-0 -z-10 pointer-events-none">
+          <div className="absolute top-0 left-1/4 w-[500px] h-[500px] rounded-full bg-blue-700/10 blur-[120px]" />
+          <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-violet-700/10 blur-[100px]" />
+        </div>
+
+        <AnimatePresence mode="wait">
+          {!itinerary ? (
+            <Suspense fallback={<div className="w-full py-12 flex justify-center text-slate-500 text-sm">Loading explorer...</div>}>
+              <ExploreForm key="form" onGenerate={setItinerary} />
+            </Suspense>
+          ) : (
+            <ItineraryView
+              key="itinerary"
+              itinerary={itinerary}
+              onReset={() => setItinerary(null)}
+            />
+          )}
+        </AnimatePresence>
+      </main>
+    </div>
   );
 }

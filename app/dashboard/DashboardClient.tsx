@@ -142,7 +142,7 @@ function StatCard({
       <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center mb-4 shadow-lg`}>
         <Icon size={18} className="text-white" />
       </div>
-      <p className="text-2xl font-black text-white mb-0.5">{value}</p>
+      <p className="text-xl sm:text-2xl font-black text-white mb-0.5">{value}</p>
       <p className="text-xs font-bold text-slate-300">{label}</p>
       {sub && <p className="text-xs text-slate-500 mt-0.5">{sub}</p>}
     </motion.div>
@@ -300,19 +300,19 @@ function EmptyState() {
         No trips planned yet
       </h2>
       <p className="text-slate-400 text-base max-w-sm mb-8 leading-relaxed">
-        Your dashboard is ready. Explore destinations, let AI craft your perfect
-        itinerary, then save it here.
+        Your dashboard is ready. Explore destinations, craft your custom
+        itinerary, then save and track it here.
       </p>
 
       {/* Feature hints */}
       <div className="flex flex-wrap justify-center gap-3 mb-8">
-        {["3D Globe Explorer", "AI Day Planner", "Budget Breakdown"].map(
+        {["3D Globe Explorer", "Multi-Day Schedules", "Budget Breakdown"].map(
           (feat) => (
             <span
               key={feat}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass text-xs font-semibold text-slate-400"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl glass border border-white/10 text-xs font-semibold text-slate-300"
             >
-              <Sparkles size={11} className="text-cyan-400" />
+              <Compass size={11} className="text-cyan-400" />
               {feat}
             </span>
           )
@@ -370,7 +370,7 @@ export default function DashboardClient({ trips: initialTrips, profile }: Props)
         transition={{ duration: 0.5 }}
         className="sticky top-0 z-40 border-b border-white/5 bg-[#020510]/80 backdrop-blur-xl"
       >
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2.5 group">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center shadow-lg shadow-blue-500/20 group-hover:shadow-blue-500/35 transition-shadow">
@@ -417,7 +417,7 @@ export default function DashboardClient({ trips: initialTrips, profile }: Props)
         </div>
       </motion.header>
 
-      <div className="max-w-7xl mx-auto px-6 py-10">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10">
         {/* ── Welcome Banner ── */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -428,7 +428,7 @@ export default function DashboardClient({ trips: initialTrips, profile }: Props)
           <p className="text-slate-500 text-sm font-medium mb-1">
             Welcome back,
           </p>
-          <h1 className="text-3xl sm:text-4xl font-black text-white">
+          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white">
             {displayName} 👋
           </h1>
         </motion.div>
@@ -542,8 +542,8 @@ export default function DashboardClient({ trips: initialTrips, profile }: Props)
                     <p className="text-sm font-bold text-slate-400 group-hover:text-white transition-colors">
                       Plan a new trip
                     </p>
-                    <p className="text-xs text-slate-600 mt-0.5">
-                      AI-powered in seconds
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Tailored multi-day plan
                     </p>
                   </div>
                 </Link>

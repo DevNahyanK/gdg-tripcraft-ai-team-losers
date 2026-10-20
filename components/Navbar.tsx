@@ -1,6 +1,6 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Compass, Menu, X } from "lucide-react";
 import { useState } from "react";
 
@@ -70,39 +70,46 @@ export default function Navbar() {
             className="md:hidden p-2 rounded-xl hover:bg-white/5 text-slate-300 hover:text-white transition-colors"
             onClick={() => setMobileOpen((o) => !o)}
             aria-label="Toggle menu"
+            aria-expanded={mobileOpen}
           >
             {mobileOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
         </nav>
 
         {/* Mobile menu */}
-        {mobileOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="glass rounded-2xl px-4 py-4 mt-2 max-w-7xl mx-auto"
-          >
-            {NAV_LINKS.map((link) => (
-              <a
-                key={link.label}
-                href={link.href}
-                className="block px-3 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-all font-medium"
-                onClick={() => setMobileOpen(false)}
-              >
-                {link.label}
-              </a>
-            ))}
-            <div className="border-t border-white/10 mt-2 pt-3 flex flex-col gap-2">
-              <a href="/auth?mode=login" className="block px-3 py-2.5 text-sm text-slate-300 hover:text-white rounded-xl hover:bg-white/5 transition-all font-medium">
-                Sign in
-              </a>
-              <a href="/auth?mode=signup" className="block px-4 py-3 text-sm font-semibold text-center rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white hover:from-blue-500 hover:to-violet-500 transition-all">
-                Get Started Free
-              </a>
-            </div>
-          </motion.div>
-        )}
+        <AnimatePresence>
+          {mobileOpen && (
+            <motion.div
+              key="mobile-menu"
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="glass rounded-2xl px-4 py-4 mt-2 max-w-7xl mx-auto"
+              role="navigation"
+              aria-label="Mobile navigation"
+            >
+              {NAV_LINKS.map((link) => (
+                <a
+                  key={link.label}
+                  href={link.href}
+                  className="block px-3 py-2.5 text-sm text-slate-300 hover:text-white hover:bg-white/5 rounded-xl transition-all font-medium"
+                  onClick={() => setMobileOpen(false)}
+                >
+                  {link.label}
+                </a>
+              ))}
+              <div className="border-t border-white/10 mt-2 pt-3 flex flex-col gap-2">
+                <a href="/auth?mode=login" className="block px-3 py-2.5 text-sm text-slate-300 hover:text-white rounded-xl hover:bg-white/5 transition-all font-medium">
+                  Sign in
+                </a>
+                <a href="/auth?mode=signup" className="block px-4 py-3 text-sm font-semibold text-center rounded-xl bg-gradient-to-r from-blue-600 to-violet-600 text-white hover:from-blue-500 hover:to-violet-500 transition-all">
+                  Get Started Free
+                </a>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </motion.header>
   );

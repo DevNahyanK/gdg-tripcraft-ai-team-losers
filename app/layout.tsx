@@ -2,19 +2,19 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TripCraft AI — Smart 3D Travel Planning",
+  title: "TripCraft — Modern Travel Itinerary & Budget Platform",
   description:
-    "AI-powered travel itinerary planner with an interactive 3D globe. Select your destination, set your budget, and craft the perfect multi-day plan in seconds.",
+    "Curated multi-day itineraries, itemized budget breakdowns, and spatial 3D exploration for destinations around the globe.",
   keywords: [
     "travel planner",
-    "AI itinerary",
+    "trip itinerary",
     "3D globe",
-    "trip planning",
+    "travel budget",
     "TripCraft",
   ],
   openGraph: {
-    title: "TripCraft AI",
-    description: "AI-powered 3D travel planning workspace",
+    title: "TripCraft",
+    description: "Curated multi-day travel planning & spatial exploration workspace",
     type: "website",
   },
 };
