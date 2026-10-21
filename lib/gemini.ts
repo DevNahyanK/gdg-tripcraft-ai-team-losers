@@ -93,8 +93,10 @@ Generate the itinerary now:`;
 }
 
 /**
- * Calls Gemini using strictly and only "gemini-1.5-flash" with maxOutputTokens: 8192.
- * No fallback models are used.
+ * Calls Gemini using strictly and only "gemini-1.5-flash" with apiVersion: "v1"
+ * and maxOutputTokens: 8192.
+ * Initializes GoogleGenerativeAI with apiVersion: "v1" and provides direct REST
+ * fetch fallback for gemini-1.5-flash.
  */
 export async function callGeminiRaw(req: GenerateRequest): Promise<string> {
   // Ensure the API key is properly sanitized and read from process.env
@@ -107,19 +109,30 @@ export async function callGeminiRaw(req: GenerateRequest): Promise<string> {
     throw new Error(errorMsg);
   }
 
-  const genAI = new GoogleGenerativeAI(apiKey);
   const prompt = buildPrompt(req);
 
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    generationConfig: GENERATION_CONFIG,
-  });
-
+  // 1. Initialize GoogleGenerativeAI with apiVersion: "v1" instead of default v1beta
   try {
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: GENERATION_CONFIG,
-    });
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel(
+      {
+        model: MODEL_NAME,
+        generationConfig: GENERATION_CONFIG,
+      },
+      {
+        apiVersion: "v1",
+      }
+    );
+
+    const result = await model.generateContent(
+      {
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: GENERATION_CONFIG,
+      },
+      {
+        apiVersion: "v1",
+      }
+    );
 
     const candidate = result.response.candidates?.[0];
     if (candidate?.finishReason === "MAX_TOKENS") {
@@ -127,9 +140,48 @@ export async function callGeminiRaw(req: GenerateRequest): Promise<string> {
     }
 
     return result.response.text();
-  } catch (err: unknown) {
-    console.error(`GEMINI ERROR: Direct call to ${MODEL_NAME} failed:`, err);
-    throw err;
+  } catch (sdkErr: unknown) {
+    console.warn(
+      `[GEMINI INFO] SDK call with apiVersion 'v1' encountered an error. Attempting direct REST fetch for ${MODEL_NAME}...`,
+      sdkErr
+    );
+
+    // 2. Direct REST fetch to Google's endpoints for gemini-1.5-flash (v1 and v1beta)
+    const endpoints = [
+      `https://generativelanguage.googleapis.com/v1/models/${MODEL_NAME}:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`,
+    ];
+
+    let lastFetchError: unknown = null;
+    for (const url of endpoints) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: GENERATION_CONFIG,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) {
+            return text;
+          }
+        } else {
+          const errBody = await response.text();
+          const apiVer = url.includes("/v1/") ? "v1" : "v1beta";
+          lastFetchError = new Error(`REST endpoint (${apiVer}) returned HTTP ${response.status}: ${errBody}`);
+        }
+      } catch (err: unknown) {
+        lastFetchError = err;
+      }
+    }
+
+    console.error(`GEMINI ERROR: Direct call to ${MODEL_NAME} failed:`, lastFetchError || sdkErr);
+    throw lastFetchError || sdkErr;
   }
 }
 
