@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import Navbar from "@/components/Navbar";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { createClient } from "@/utils/supabase/client";
 import {
   MapPin,
@@ -288,9 +289,19 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
         body: JSON.stringify({ destination, durationDays, budgetTier, interests }),
       });
 
-      const data = await res.json();
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error(
+          res.status === 504
+            ? "Generation timed out on server. Please try a shorter duration or retry."
+            : `Server returned an unparseable response (HTTP ${res.status}).`
+        );
+      }
+
       if (!res.ok) {
-        throw new Error(data.error || data.details || "Generation failed.");
+        throw new Error(data?.error || data?.details || "Generation failed.");
       }
       onGenerate(data as GeneratedItinerary);
     } catch (err: unknown) {
@@ -718,10 +729,24 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
   const [showToast, setShowToast] = useState(false);
   const [savedTripId, setSavedTripId] = useState<string | null>(null);
 
-  const day = itinerary.days[activeDay];
-  const { budget } = itinerary;
-
-  const budgetMeta = BUDGET_TIERS.find((b) => b.id === itinerary.budget_tier)!;
+  const budgetMeta =
+    BUDGET_TIERS.find((b) => b.id === itinerary?.budget_tier) ?? BUDGET_TIERS[1];
+  const day =
+    itinerary?.days?.[activeDay] ??
+    itinerary?.days?.[0] ?? {
+      day_number: 1,
+      theme: "Daily Schedule",
+      slots: { morning: [], afternoon: [], evening: [] },
+    };
+  const budget = itinerary?.budget ?? {
+    total_estimated_cost: 0,
+    accommodation_cost: 0,
+    food_cost: 0,
+    transport_cost: 0,
+    activities_cost: 0,
+    misc_cost: 0,
+    currency: "PKR",
+  };
 
   const handleSaveTrip = async () => {
     try {
@@ -991,7 +1016,7 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
           >
             {(["morning", "afternoon", "evening"] as const).map((slot) => {
               const meta = SLOT_META[slot];
-              const activities = day.slots[slot];
+              const activities = day?.slots?.[slot] ?? [];
               if (!activities?.length) return null;
 
               return (
@@ -1185,11 +1210,18 @@ export default function ExplorePage() {
               <ExploreForm key="form" onGenerate={setItinerary} />
             </Suspense>
           ) : (
-            <ItineraryView
-              key="itinerary"
-              itinerary={itinerary}
+            <ErrorBoundary
+              key="itinerary-boundary"
               onReset={() => setItinerary(null)}
-            />
+              title="Unable to Display Itinerary"
+              description="A rendering error occurred while laying out this itinerary. You can craft a new itinerary or reset the view."
+            >
+              <ItineraryView
+                key="itinerary"
+                itinerary={itinerary}
+                onReset={() => setItinerary(null)}
+              />
+            </ErrorBoundary>
           )}
         </AnimatePresence>
       </main>

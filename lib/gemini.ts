@@ -11,13 +11,15 @@ const BUDGET_CONTEXT: Record<string, string> = {
     "luxury traveller spending PKR 30,000–60,000/day total. Choose premium hotels, fine dining, and private chauffeur services.",
 };
 
-// Priority list of Gemini models to support current Google API offerings with graceful fallbacks
-const CANDIDATE_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-1.5-flash",
-  "gemini-flash-latest",
-  "gemini-pro",
-];
+// Explicit generation config setting maxOutputTokens to 8192 to prevent payload truncation
+export const GENERATION_CONFIG = {
+  responseMimeType: "application/json",
+  temperature: 0.7,
+  topP: 0.9,
+  maxOutputTokens: 8192,
+};
+
+const MODEL_NAME = "gemini-1.5-flash";
 
 /**
  * Builds the Gemini system prompt that forces a structured JSON response
@@ -66,15 +68,15 @@ STRICT RULES:
 
 Activity object shape:
 {
-  "title": string,              // max 150 chars — name of place/activity
-  "description": string,        // 1–2 sentence description
-  "location_name": string,      // specific neighbourhood or address area
+  "title": string,              // concise name of place/activity (e.g. "Eiffel Tower Summit")
+  "description": string,        // concise 1-sentence description (under 20 words) to conserve tokens
+  "location_name": string,      // specific neighbourhood or district (under 40 chars)
   "estimated_cost": number,     // in PKR per person (MUST BE POSITIVE NON-ZERO, e.g. 800, 1500, 3000)
-  "category": "sightseeing" | "food" | "travel" | "leisure",
+  "category": "sightseeing" | "food" | "travel" | "leisure", // MUST BE EXACT LOWERCASE: "sightseeing", "food", "travel", or "leisure"
   "order_index": number         // 0-indexed within the time slot
 }
 
-3. Each day must have at least 1 activity per slot (morning, afternoon, evening).
+3. Each day must have 1 or 2 activities per slot (morning, afternoon, evening). Do NOT exceed 2 activities per slot.
 4. Activities must reflect the traveller's interests: ${interestsList}.
 5. CRITICAL COST RULE: Assign a realistic, NON-ZERO estimated_cost (in PKR) to EVERY SINGLE activity. NEVER output 0 for estimated_cost.
    - "food" activities: meals, dining, snacks (e.g. 700 - 3500 PKR depending on tier).
@@ -84,17 +86,17 @@ Activity object shape:
 6. All costs MUST be realistic for ${req.destination} at the ${req.budgetTier} tier in PKR.
 7. budget.total_estimated_cost must equal the sum of all five budget line items (accommodation_cost + food_cost + transport_cost + activities_cost + misc_cost).
 8. Do NOT include accommodation in activities — keep it separate in the budget.
+9. CRITICAL CATEGORY RULE: The "category" field for EVERY activity MUST strictly be one of these four exact lowercase strings: "sightseeing", "food", "travel", or "leisure". Do NOT use uppercase or alternate terms (e.g., do not output "Food", "Sightseeing", "Shopping", "Culture", or "Dining").
+10. TOKEN CONSERVATION & COMPLETION: Keep all descriptions concise, direct, and under 20 words each. Ensure the complete JSON finishes cleanly without exceeding token limits.
 
 Generate the itinerary now:`;
 }
 
 /**
- * Calls the Gemini API with automatic model fallbacks (gemini-2.5-flash, gemini-1.5-flash, gemini-flash-latest, gemini-pro)
- * and returns a validated GeneratedItinerary.
+ * Calls Gemini using strictly and only "gemini-1.5-flash" with maxOutputTokens: 8192.
+ * No fallback models are used.
  */
-export async function generateItinerary(
-  req: GenerateRequest
-): Promise<GeneratedItinerary> {
+export async function callGeminiRaw(req: GenerateRequest): Promise<string> {
   // Ensure the API key is properly sanitized and read from process.env
   const rawKey = process.env.GEMINI_API_KEY || "";
   const apiKey = rawKey.trim().replace(/^['"]|['"]$/g, "");
@@ -108,71 +110,74 @@ export async function generateItinerary(
   const genAI = new GoogleGenerativeAI(apiKey);
   const prompt = buildPrompt(req);
 
-  let rawText = "";
-  let lastError: unknown = null;
-  let successfulModel = "";
+  const model = genAI.getGenerativeModel({
+    model: MODEL_NAME,
+    generationConfig: GENERATION_CONFIG,
+  });
 
-  // Try candidate models in order until one succeeds
-  for (const modelName of CANDIDATE_MODELS) {
-    try {
-      // Modern models support responseMimeType: "application/json"
-      const isLegacyPro = modelName === "gemini-pro";
-      const generationConfig = isLegacyPro
-        ? { temperature: 0.7, topP: 0.9, maxOutputTokens: 8192 }
-        : {
-            responseMimeType: "application/json",
-            temperature: 0.7,
-            topP: 0.9,
-            maxOutputTokens: 8192,
-          };
+  try {
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: GENERATION_CONFIG,
+    });
 
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig,
-      });
-
-      const result = await model.generateContent(prompt);
-      rawText = result.response.text();
-      successfulModel = modelName;
-      break; // Success! Break out of the loop
-    } catch (err: unknown) {
-      lastError = err;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.warn(`[GEMINI INFO] Model "${modelName}" failed (${errMsg.slice(0, 80)}...). Trying fallback...`);
+    const candidate = result.response.candidates?.[0];
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      console.warn(`[GEMINI WARNING] Model "${MODEL_NAME}" reached MAX_TOKENS limit (8192 tokens)!`);
     }
+
+    return result.response.text();
+  } catch (err: unknown) {
+    console.error(`GEMINI ERROR: Direct call to ${MODEL_NAME} failed:`, err);
+    throw err;
+  }
+}
+
+/**
+ * Parses raw text from Gemini into a validated GeneratedItinerary.
+ */
+export function parseItineraryJson(rawText: string): GeneratedItinerary {
+  let cleaned = rawText
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  // Find outermost JSON object
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
   }
 
-  if (!rawText) {
-    console.error("GEMINI ERROR: All candidate models failed. Last error:", lastError);
-    const msg = lastError instanceof Error ? lastError.message : String(lastError);
-    throw new Error(`Gemini API call failed across all models: ${msg}`);
-  }
-
-  // Parse JSON
   let parsed: unknown;
   try {
-    // Strip any accidental markdown code fences
-    const cleaned = rawText
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
     parsed = JSON.parse(cleaned);
   } catch (err: unknown) {
-    console.error("GEMINI ERROR: Failed to parse JSON from model:", successfulModel, err, "Raw output:", rawText);
+    console.error("GEMINI ERROR: Failed to parse JSON from model output:", err, "Raw text:", rawText);
     throw new Error(
-      `Gemini returned invalid JSON. Raw response: ${rawText.slice(0, 500)}`
+      `Gemini returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
   // Validate against Zod schema
   const result = GeneratedItinerarySchema.safeParse(parsed);
   if (!result.success) {
-    console.error("GEMINI ERROR: Zod schema validation failed on output from:", successfulModel, result.error);
+    console.error("GEMINI ERROR: Zod schema validation failed:", result.error);
     throw new Error(
       `AI response failed schema validation: ${result.error.message}`
     );
   }
 
   return result.data;
+}
+
+/**
+ * High-level helper: Calls Gemini and returns validated itinerary.
+ */
+export async function generateItinerary(
+  req: GenerateRequest
+): Promise<GeneratedItinerary> {
+  const rawText = await callGeminiRaw(req);
+  return parseItineraryJson(rawText);
 }

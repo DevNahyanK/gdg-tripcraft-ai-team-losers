@@ -1,12 +1,25 @@
 import { z } from "zod";
 
+// ─── Activity Category ─────────────────────────────────────────────────────────
+export const ActivityCategorySchema = z.preprocess((val) => {
+  if (typeof val !== "string") return "sightseeing";
+  const v = val.toLowerCase().trim();
+  if (["food", "dining", "meal", "restaurant", "cafe", "dinner", "lunch", "breakfast"].includes(v)) return "food";
+  if (["travel", "transit", "transport", "commute", "flight", "drive"].includes(v)) return "travel";
+  if (["leisure", "relaxation", "shopping", "entertainment", "nightlife", "park"].includes(v)) return "leisure";
+  if (["sightseeing", "tour", "attraction", "visit", "culture", "historical", "monument"].includes(v)) return "sightseeing";
+  return ["sightseeing", "food", "travel", "leisure"].includes(v) ? v : "sightseeing";
+}, z.enum(["sightseeing", "food", "travel", "leisure"]));
+
+export type ActivityCategory = z.infer<typeof ActivityCategorySchema>;
+
 // ─── Activity ─────────────────────────────────────────────────────────────────
 export const ActivitySchema = z.object({
   title: z.string().min(1).max(150),
   description: z.string(),
   location_name: z.string(),
   estimated_cost: z.number().nonnegative(),
-  category: z.enum(["sightseeing", "food", "travel", "leisure"]),
+  category: ActivityCategorySchema,
   order_index: z.number().int().nonnegative(),
 });
 
