@@ -155,8 +155,9 @@ const staggerItem = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function formatCost(n: number) {
-  return `PKR ${n.toLocaleString("en-PK")}`;
+function formatCost(n: number | undefined | null, currency = "PKR") {
+  const num = typeof n === "number" && !isNaN(n) ? Math.round(n) : 0;
+  return `${currency} ${num.toLocaleString("en-PK")}`;
 }
 
 /**
@@ -165,22 +166,29 @@ function formatCost(n: number) {
  * based on the itinerary's category budget and the time slot.
  */
 function getActivityCost(
-  activity: { estimated_cost?: number; category?: string },
-  slot: "morning" | "afternoon" | "evening",
-  budget?: {
-    food_cost?: number;
-    activities_cost?: number;
-    transport_cost?: number;
-    total_estimated_cost?: number;
-  },
+  activity: any,
+  slot: "morning" | "afternoon" | "evening" | string = "morning",
+  budget?: Record<string, any>,
   durationDays: number = 3
 ): number {
-  if (typeof activity.estimated_cost === "number" && activity.estimated_cost > 0) {
-    return activity.estimated_cost;
+  if (!activity || typeof activity === "string") return 1000;
+
+  const explicitCost =
+    activity?.estimated_cost ??
+    activity?.cost ??
+    activity?.estimatedCost ??
+    activity?.price;
+
+  if (typeof explicitCost === "number" && !isNaN(explicitCost) && explicitCost > 0) {
+    return explicitCost;
+  }
+  if (typeof explicitCost === "string") {
+    const parsed = parseFloat(explicitCost.replace(/[^0-9.]/g, ""));
+    if (!isNaN(parsed) && parsed > 0) return parsed;
   }
 
   const days = Math.max(1, durationDays);
-  const category = activity.category || "sightseeing";
+  const category = activity?.category || "sightseeing";
 
   if (category === "food" && budget?.food_cost && budget.food_cost > 0) {
     const dailyFood = budget.food_cost / days;
@@ -211,7 +219,8 @@ function getActivityCost(
     evening: { food: 2400, sightseeing: 1500, travel: 800, leisure: 1800 },
   };
 
-  return baseDefaults[slot]?.[category] ?? 1200;
+  const slotKey = ["morning", "afternoon", "evening"].includes(slot) ? slot : "morning";
+  return baseDefaults[slotKey]?.[category] ?? 1200;
 }
 
 // ─── Form Component ───────────────────────────────────────────────────────────
@@ -303,11 +312,12 @@ function ExploreForm({ onGenerate }: ExploreFormProps) {
       if (!res.ok) {
         throw new Error(data?.error || data?.details || "Generation failed.");
       }
+      setLoading(false);
+      console.log("Generated itinerary received on client:", data);
       onGenerate(data as GeneratedItinerary);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Something went wrong.";
       setError(msg);
-    } finally {
       setLoading(false);
     }
   };
@@ -722,6 +732,8 @@ interface ItineraryViewProps {
 }
 
 function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
+  console.log("Generated itinerary received on client (ItineraryView):", itinerary);
+
   const [activeDay, setActiveDay] = useState(0);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -729,24 +741,52 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
   const [showToast, setShowToast] = useState(false);
   const [savedTripId, setSavedTripId] = useState<string | null>(null);
 
+  // 1. Safe fallbacks for data, days, and budget
+  const data = (itinerary || {}) as any;
+  const days: any[] = Array.isArray(data?.days) ? data.days : [];
+  const budget: Record<string, any> =
+    data?.budget && typeof data.budget === "object" && !Array.isArray(data.budget)
+      ? data.budget
+      : {};
+
+  // 2. Safe snake_case / camelCase property reading
+  const destination = data?.destination || "Your Destination";
+  const durationDays = Number(data?.duration_days ?? data?.durationDays) || days.length || 1;
+  const budgetTier = (data?.budget_tier ?? data?.budgetTier ?? "budget") as string;
+  const currency = budget?.currency || "PKR";
+
+  // 3. Safe budget calculation
+  const totalBudget =
+    typeof budget?.total_estimated_cost === "number" && budget.total_estimated_cost > 0
+      ? budget.total_estimated_cost
+      : Object.values(budget).reduce((acc: number, curr: any) => acc + (Number(curr) || 0), 0);
+
   const budgetMeta =
-    BUDGET_TIERS.find((b) => b.id === itinerary?.budget_tier) ?? BUDGET_TIERS[1];
-  const day =
-    itinerary?.days?.[activeDay] ??
-    itinerary?.days?.[0] ?? {
-      day_number: 1,
-      theme: "Daily Schedule",
-      slots: { morning: [], afternoon: [], evening: [] },
+    BUDGET_TIERS.find((b) => b.id === budgetTier) ?? BUDGET_TIERS[0] ?? {
+      id: "budget",
+      label: "Budget",
+      icon: "💸",
+      bg: "bg-emerald-500/10",
+      border: "border-emerald-500/25",
     };
-  const budget = itinerary?.budget ?? {
-    total_estimated_cost: 0,
-    accommodation_cost: 0,
-    food_cost: 0,
-    transport_cost: 0,
-    activities_cost: 0,
-    misc_cost: 0,
-    currency: "PKR",
+
+  // Safe active day resolution
+  const displayDays = Array.isArray(days) && days.length > 0
+    ? days
+    : [{ day_number: 1, theme: "Daily Schedule", activities: [] }];
+
+  const currentDayIndex = activeDay < displayDays.length ? activeDay : 0;
+  const day = displayDays[currentDayIndex] || {
+    day_number: 1,
+    theme: "Daily Schedule",
+    activities: [],
   };
+
+  const dayNumber = day?.day_number ?? day?.dayNumber ?? (currentDayIndex + 1);
+  const dayTheme = day?.theme || "Daily Schedule";
+
+  // Check both activities and slots per requirement 4
+  const activities: any[] = day.activities || (day.slots ? Object.values(day.slots).flat() : []);
 
   const handleSaveTrip = async () => {
     try {
@@ -769,11 +809,22 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
         // Fall back to server auth verification
       }
 
-      // 2. Call save API
+      // 2. Call save API with normalized snake_case payload
       const res = await fetch("/api/trips/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(itinerary),
+        body: JSON.stringify({
+          ...data,
+          destination,
+          duration_days: durationDays,
+          budget_tier: budgetTier,
+          days,
+          budget: {
+            ...budget,
+            total_estimated_cost: totalBudget,
+            currency,
+          },
+        }),
       });
 
       if (res.status === 401) {
@@ -782,13 +833,13 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
         return;
       }
 
-      const data = await res.json();
+      const resData = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || "Failed to save trip.");
+        throw new Error(resData.error || "Failed to save trip.");
       }
 
       setSaveStatus("saved");
-      setSavedTripId(data.tripId);
+      setSavedTripId(resData.tripId);
       setShowToast(true);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error saving trip.";
@@ -887,13 +938,13 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
             </div>
 
             <h1 className="text-2xl xs:text-3xl sm:text-5xl font-black text-white tracking-tight leading-tight">
-              {itinerary.destination}
+              {destination}
             </h1>
 
             <div className="flex items-center gap-4 mt-3 text-sm text-slate-400">
               <span className="flex items-center gap-1.5">
                 <Calendar size={14} className="text-cyan-400" />
-                {itinerary.duration_days} Days Customized Schedule
+                {durationDays} Days Customized Schedule
               </span>
             </div>
           </div>
@@ -903,7 +954,7 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
               Estimated Total Budget
             </span>
             <span className="text-2xl sm:text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-400">
-              {formatCost(budget.total_estimated_cost)}
+              {formatCost(totalBudget, currency)}
             </span>
           </div>
         </div>
@@ -922,16 +973,16 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
             Budget Breakdown
           </h2>
           <span className="text-xl font-black text-white">
-            {formatCost(budget.total_estimated_cost)}
+            {formatCost(totalBudget, currency)}
           </span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[
-            { label: "Stay", val: budget.accommodation_cost, icon: Home, color: "text-violet-400" },
-            { label: "Food", val: budget.food_cost, icon: Utensils, color: "text-orange-400" },
-            { label: "Transport", val: budget.transport_cost, icon: Bus, color: "text-blue-400" },
-            { label: "Activities", val: budget.activities_cost, icon: Activity, color: "text-emerald-400" },
-            { label: "Misc", val: budget.misc_cost, icon: Package, color: "text-rose-400" },
+            { label: "Stay", val: Number(budget?.accommodation_cost ?? budget?.accommodationCost) || 0, icon: Home, color: "text-violet-400" },
+            { label: "Food", val: Number(budget?.food_cost ?? budget?.foodCost) || 0, icon: Utensils, color: "text-orange-400" },
+            { label: "Transport", val: Number(budget?.transport_cost ?? budget?.transportCost) || 0, icon: Bus, color: "text-blue-400" },
+            { label: "Activities", val: Number(budget?.activities_cost ?? budget?.activitiesCost) || 0, icon: Activity, color: "text-emerald-400" },
+            { label: "Misc", val: Number(budget?.misc_cost ?? budget?.miscCost) || 0, icon: Package, color: "text-rose-400" },
           ].map(({ label, val, icon: Icon, color }) => (
             <div
               key={label}
@@ -940,7 +991,7 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
               <Icon size={15} className={color} />
               <span className="text-xs text-slate-500 font-medium">{label}</span>
               <span className="text-xs font-bold text-white">
-                {formatCost(val)}
+                {formatCost(val, currency)}
               </span>
             </div>
           ))}
@@ -948,11 +999,11 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
         {/* Budget bar */}
         <div className="mt-4 flex gap-1 h-1.5 rounded-full overflow-hidden">
           {[
-            { val: budget.accommodation_cost, color: "bg-violet-500" },
-            { val: budget.food_cost, color: "bg-orange-500" },
-            { val: budget.transport_cost, color: "bg-blue-500" },
-            { val: budget.activities_cost, color: "bg-emerald-500" },
-            { val: budget.misc_cost, color: "bg-rose-500" },
+            { val: Number(budget?.accommodation_cost ?? budget?.accommodationCost) || 0, color: "bg-violet-500" },
+            { val: Number(budget?.food_cost ?? budget?.foodCost) || 0, color: "bg-orange-500" },
+            { val: Number(budget?.transport_cost ?? budget?.transportCost) || 0, color: "bg-blue-500" },
+            { val: Number(budget?.activities_cost ?? budget?.activitiesCost) || 0, color: "bg-emerald-500" },
+            { val: Number(budget?.misc_cost ?? budget?.miscCost) || 0, color: "bg-rose-500" },
           ].map(({ val, color }, i) => (
             <motion.div
               key={i}
@@ -960,7 +1011,7 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
               animate={{ scaleX: 1 }}
               transition={{ delay: 0.3 + i * 0.08, duration: 0.5, ease: "easeOut" }}
               style={{
-                flex: val / (budget.total_estimated_cost || 1),
+                flex: totalBudget > 0 ? Math.max(0.05, val / totalBudget) : 1,
                 transformOrigin: "left",
               }}
               className={`${color} rounded-full`}
@@ -971,128 +1022,133 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
 
       {/* ── Day Tabs ── */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-1 scrollbar-thin">
-        {itinerary.days.map((d, i) => (
-          <button
-            key={d.day_number}
-            onClick={() => setActiveDay(i)}
-            className={`flex-shrink-0 flex flex-col items-center gap-1 px-5 py-3 rounded-xl text-sm font-bold border transition-all duration-200 ${
-              activeDay === i
-                ? "bg-blue-500/15 border-blue-500/40 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
-                : "border-white/10 text-slate-400 hover:text-white hover:border-white/20"
-            }`}
-          >
-            <span className="text-xs text-slate-500 font-medium">Day</span>
-            <span>{d.day_number}</span>
-          </button>
-        ))}
+        {displayDays.map((d: any, i: number) => {
+          const tabNumber = d?.day_number ?? d?.dayNumber ?? (i + 1);
+          return (
+            <button
+              key={tabNumber}
+              onClick={() => setActiveDay(i)}
+              className={`flex-shrink-0 flex flex-col items-center gap-1 px-5 py-3 rounded-xl text-sm font-bold border transition-all duration-200 ${
+                currentDayIndex === i
+                  ? "bg-blue-500/15 border-blue-500/40 text-white shadow-[0_0_16px_rgba(59,130,246,0.2)]"
+                  : "border-white/10 text-slate-400 hover:text-white hover:border-white/20"
+              }`}
+            >
+              <span className="text-xs text-slate-500 font-medium">Day</span>
+              <span>{tabNumber}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Day Detail ── */}
       <AnimatePresence mode="wait">
         <motion.div
-          key={activeDay}
+          key={currentDayIndex}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -20 }}
           transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
         >
           {/* Day theme */}
-          {day.theme && (
+          {dayTheme && (
             <div className="flex items-center gap-2.5 mb-5">
               <div className="w-1 h-8 rounded-full bg-gradient-to-b from-blue-500 to-violet-500" />
               <div>
-                <p className="text-xs text-slate-500 font-medium">Day {day.day_number} Theme</p>
-                <p className="text-white font-bold">{day.theme}</p>
+                <p className="text-xs text-slate-500 font-medium">Day {dayNumber} Theme</p>
+                <p className="text-white font-bold">{dayTheme}</p>
               </div>
             </div>
           )}
 
-          {/* Time slots */}
-          <motion.div
-            variants={staggerContainer}
-            initial="hidden"
-            animate="visible"
-            className="space-y-4"
-          >
-            {(["morning", "afternoon", "evening"] as const).map((slot) => {
-              const meta = SLOT_META[slot];
-              const activities = day?.slots?.[slot] ?? [];
-              if (!activities?.length) return null;
+          {/* Activities list safely checking both activities and slots */}
+          {Array.isArray(activities) && activities.length > 0 ? (
+            <motion.div
+              variants={staggerContainer}
+              initial="hidden"
+              animate="visible"
+              className="space-y-3"
+            >
+              {activities.map((act: any, ai: number) => {
+                if (!act) return null;
+                const isString = typeof act === "string";
+                const actTitle = isString
+                  ? act
+                  : act?.title || act?.name || act?.activity || `Activity ${ai + 1}`;
+                const category = (!isString && act?.category) || "sightseeing";
+                const CatIcon = CATEGORY_ICONS[category] ?? Sparkles;
+                const catColor = CATEGORY_COLORS[category] ?? "text-slate-400 bg-white/5";
+                const locationName = !isString
+                  ? act?.location_name ?? act?.locationName ?? act?.location ?? ""
+                  : "";
+                const description = !isString ? act?.description ?? act?.details ?? "" : "";
+                const rawSlot = !isString
+                  ? act?.slot ?? act?.time_slot ?? act?.timeSlot ?? ""
+                  : "";
+                const slotName = typeof rawSlot === "string" ? rawSlot : "";
+                const displayCost = !isString
+                  ? getActivityCost(act, slotName || "morning", budget, durationDays)
+                  : 0;
 
-              return (
-                <motion.div
-                  key={slot}
-                  variants={staggerItem}
-                  className="glass rounded-2xl overflow-hidden"
-                >
-                  {/* Slot header */}
-                  <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-white/5">
-                    <meta.icon size={14} className={meta.color} />
-                    <span className={`text-sm font-bold ${meta.color}`}>
-                      {meta.label}
-                    </span>
-                    <span className="text-xs text-slate-600 ml-auto">
-                      {activities.length} {activities.length === 1 ? "activity" : "activities"}
-                    </span>
-                  </div>
+                return (
+                  <motion.div
+                    key={ai}
+                    variants={staggerItem}
+                    className="glass rounded-2xl p-4 sm:p-5 hover:bg-white/5 transition-all border border-white/5"
+                  >
+                    <div className="flex items-start gap-4">
+                      {/* Category badge */}
+                      <div
+                        className={`w-9 h-9 flex-shrink-0 rounded-xl flex items-center justify-center mt-0.5 ${catColor}`}
+                      >
+                        <CatIcon size={16} />
+                      </div>
 
-                  {/* Activities */}
-                  <div className="divide-y divide-white/5">
-                    {activities.map((act, ai) => {
-                      const CatIcon = CATEGORY_ICONS[act.category] ?? Sparkles;
-                      const catColor = CATEGORY_COLORS[act.category] ?? "text-slate-400 bg-white/5";
-                      const displayCost = getActivityCost(
-                        act,
-                        slot,
-                        itinerary.budget,
-                        itinerary.duration_days
-                      );
-
-                      return (
-                        <motion.div
-                          key={ai}
-                          initial={{ opacity: 0, x: -12 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: ai * 0.07 }}
-                          className="flex items-start gap-4 px-5 py-4 hover:bg-white/3 transition-colors"
-                        >
-                          {/* Category badge */}
-                          <div
-                            className={`w-8 h-8 flex-shrink-0 rounded-xl flex items-center justify-center mt-0.5 ${catColor}`}
-                          >
-                            <CatIcon size={14} />
-                          </div>
-
-                          {/* Content */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <h4 className="text-sm font-bold text-white leading-snug">
-                                {act.title}
-                              </h4>
-                              <span className="flex-shrink-0 text-xs font-semibold text-emerald-400">
-                                {formatCost(displayCost)}
+                      {/* Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm sm:text-base font-bold text-white leading-snug">
+                              {actTitle}
+                            </h4>
+                            {slotName && (
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-white/5 text-cyan-400 border border-white/10">
+                                {slotName}
                               </span>
-                            </div>
-                            {act.location_name && (
-                              <p className="flex items-center gap-1 text-xs text-slate-500 mt-0.5">
-                                <MapPin size={9} />
-                                {act.location_name}
-                              </p>
-                            )}
-                            {act.description && (
-                              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                                {act.description}
-                              </p>
                             )}
                           </div>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              );
-            })}
-          </motion.div>
+                          {displayCost > 0 && (
+                            <span className="flex-shrink-0 text-xs sm:text-sm font-bold text-emerald-400">
+                              {formatCost(displayCost, currency)}
+                            </span>
+                          )}
+                        </div>
+                        {locationName && (
+                          <p className="flex items-center gap-1 text-xs text-slate-400 mt-1">
+                            <MapPin size={11} className="text-cyan-400 flex-shrink-0" />
+                            <span>{locationName}</span>
+                          </p>
+                        )}
+                        {description && (
+                          <p className="text-xs sm:text-sm text-slate-300 mt-2 leading-relaxed">
+                            {description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </motion.div>
+          ) : (
+            <div className="glass rounded-2xl p-8 text-center text-slate-400 border border-white/5">
+              <Compass size={24} className="mx-auto mb-2 text-cyan-400 opacity-60" />
+              <p className="text-sm font-semibold text-white">No activities listed for this day</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Enjoy open leisure time to explore {destination} at your own pace.
+              </p>
+            </div>
+          )}
         </motion.div>
       </AnimatePresence>
 
@@ -1191,6 +1247,8 @@ function ItineraryView({ itinerary, onReset }: ItineraryViewProps) {
 export default function ExplorePage() {
   const [itinerary, setItinerary] = useState<GeneratedItinerary | null>(null);
 
+  console.log("Generated itinerary received on client (ExplorePage):", itinerary);
+
   return (
     <div className="min-h-screen bg-[#020510] text-slate-100 flex flex-col justify-between noise-overlay">
       {/* Global Navigation */}
@@ -1204,26 +1262,27 @@ export default function ExplorePage() {
           <div className="absolute bottom-0 right-1/4 w-[400px] h-[400px] rounded-full bg-violet-700/10 blur-[100px]" />
         </div>
 
-        <AnimatePresence mode="wait">
-          {!itinerary ? (
-            <Suspense fallback={<div className="w-full py-12 flex justify-center text-slate-500 text-sm">Loading explorer...</div>}>
-              <ExploreForm key="form" onGenerate={setItinerary} />
-            </Suspense>
-          ) : (
-            <ErrorBoundary
-              key="itinerary-boundary"
+        {itinerary ? (
+          <ErrorBoundary
+            onReset={() => setItinerary(null)}
+            title="Unable to Display Itinerary"
+            description="A rendering error occurred while laying out this itinerary. You can craft a new itinerary or reset the view."
+          >
+            <ItineraryView
+              itinerary={itinerary}
               onReset={() => setItinerary(null)}
-              title="Unable to Display Itinerary"
-              description="A rendering error occurred while laying out this itinerary. You can craft a new itinerary or reset the view."
-            >
-              <ItineraryView
-                key="itinerary"
-                itinerary={itinerary}
-                onReset={() => setItinerary(null)}
-              />
-            </ErrorBoundary>
-          )}
-        </AnimatePresence>
+            />
+          </ErrorBoundary>
+        ) : (
+          <Suspense fallback={<div className="w-full py-12 flex justify-center text-slate-500 text-sm">Loading explorer...</div>}>
+            <ExploreForm
+              onGenerate={(data) => {
+                console.log("Generated itinerary received on client:", data);
+                setItinerary(data);
+              }}
+            />
+          </Suspense>
+        )}
       </main>
     </div>
   );
