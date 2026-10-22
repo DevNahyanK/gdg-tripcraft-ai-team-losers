@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, Suspense } from "react";
+import { useState, useCallback, useEffect, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Compass,
@@ -19,7 +19,7 @@ import { createClient } from "@/utils/supabase/client";
 import { useRouter, useSearchParams } from "next/navigation";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-type AuthMode = "login" | "signup";
+type AuthMode = "login" | "signup" | "forgot";
 
 interface FormState {
   email: string;
@@ -68,6 +68,11 @@ function validate(form: FormState, mode: AuthMode): FieldErrors {
 
   if (!form.email) errors.email = "Email is required.";
   else if (!emailRe.test(form.email)) errors.email = "Enter a valid email.";
+
+  // In forgot password mode, only email is required
+  if (mode === "forgot") {
+    return errors;
+  }
 
   if (!form.password) errors.password = "Password is required.";
   else if (form.password.length < 8)
@@ -175,8 +180,9 @@ function AuthForm() {
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirect") ?? "/dashboard";
 
+  const rawMode = searchParams.get("mode");
   const initialMode: AuthMode =
-    (searchParams.get("mode") as AuthMode) ?? "login";
+    rawMode === "signup" ? "signup" : rawMode === "forgot" ? "forgot" : "login";
   const [mode, setMode] = useState<AuthMode>(initialMode);
 
   const [form, setForm] = useState<FormState>({
@@ -192,6 +198,19 @@ function AuthForm() {
   const [oauthLoading, setOauthLoading] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Surface callback errors if redirected from OAuth flow
+  useEffect(() => {
+    const errorParam =
+      searchParams.get("error_description") || searchParams.get("error");
+    if (errorParam) {
+      if (errorParam === "auth_callback_failed") {
+        setGlobalError("Authentication callback failed. Please try again.");
+      } else {
+        setGlobalError(decodeURIComponent(errorParam));
+      }
+    }
+  }, [searchParams]);
 
   const supabase = createClient();
 
@@ -226,7 +245,22 @@ function AuthForm() {
 
     setLoading(true);
     try {
-      if (mode === "signup") {
+      if (mode === "forgot") {
+        const { error } = await supabase.auth.resetPasswordForEmail(
+          form.email.trim(),
+          {
+            redirectTo: `${window.location.origin}/auth/callback?next=/reset-password`,
+          }
+        );
+
+        if (error) {
+          setGlobalError(error.message);
+        } else {
+          setSuccessMessage(
+            "Password reset instructions have been sent to your email. Please check your inbox."
+          );
+        }
+      } else if (mode === "signup") {
         const { error } = await supabase.auth.signUp({
           email: form.email,
           password: form.password,
@@ -280,15 +314,31 @@ function AuthForm() {
     setOauthLoading(true);
     setGlobalError(null);
     try {
+      const callbackUrl = new URL("/auth/callback", window.location.origin);
+      if (redirectTo) {
+        callbackUrl.searchParams.set("redirect", redirectTo);
+      }
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback?redirect=${redirectTo}`,
+          redirectTo: callbackUrl.toString(),
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
         },
       });
-      if (error) setGlobalError(error.message);
-    } catch {
-      setGlobalError("Google sign-in failed. Please try again.");
+
+      if (error) {
+        setGlobalError(error.message);
+      }
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Google sign-in failed. Please try again.";
+      setGlobalError(msg);
     } finally {
       setOauthLoading(false);
     }
@@ -346,38 +396,48 @@ function AuthForm() {
             {/* Header */}
             <div className="mb-8 text-center">
               <h1 className="text-2xl sm:text-3xl font-black text-white mb-2">
-                {isLogin ? "Welcome back" : "Create your account"}
+                {mode === "forgot"
+                  ? "Reset your password"
+                  : isLogin
+                  ? "Welcome back"
+                  : "Create your account"}
               </h1>
               <p className="text-sm text-slate-400">
-                {isLogin
+                {mode === "forgot"
+                  ? "Enter your email to receive password reset instructions."
+                  : isLogin
                   ? "Sign in to access your saved itineraries."
                   : "Start planning your perfect trip in seconds."}
               </p>
             </div>
 
-            {/* ── Google OAuth Button ── */}
-            <button
-              type="button"
-              onClick={handleGoogleAuth}
-              disabled={oauthLoading || loading}
-              className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm font-semibold text-white transition-all duration-200 hover:border-white/20 disabled:opacity-50 disabled:cursor-not-allowed mb-6"
-            >
-              {oauthLoading ? (
-                <Loader2 size={16} className="animate-spin text-slate-400" />
-              ) : (
-                <Chrome size={16} className="text-slate-300" />
-              )}
-              Continue with Google
-            </button>
+            {/* ── Google OAuth Button (hidden in forgot password mode) ── */}
+            {mode !== "forgot" && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleGoogleAuth}
+                  disabled={oauthLoading || loading}
+                  className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-sm font-semibold text-white transition-all duration-200 hover:border-white/20 disabled:opacity-50 disabled:cursor-not-allowed mb-6"
+                >
+                  {oauthLoading ? (
+                    <Loader2 size={16} className="animate-spin text-slate-400" />
+                  ) : (
+                    <Chrome size={16} className="text-slate-300" />
+                  )}
+                  Continue with Google
+                </button>
 
-            {/* Divider */}
-            <div className="flex items-center gap-3 mb-6">
-              <div className="flex-1 h-px bg-white/10" />
-              <span className="text-xs text-slate-500 font-medium">
-                or with email
-              </span>
-              <div className="flex-1 h-px bg-white/10" />
-            </div>
+                {/* Divider */}
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="flex-1 h-px bg-white/10" />
+                  <span className="text-xs text-slate-500 font-medium">
+                    or with email
+                  </span>
+                  <div className="flex-1 h-px bg-white/10" />
+                </div>
+              </>
+            )}
 
             {/* ── Form ── */}
             <form onSubmit={handleSubmit} noValidate className="space-y-4">
@@ -420,79 +480,85 @@ function AuthForm() {
                 index={1}
               />
 
-              <InputField
-                id="password"
-                label="Password"
-                type={showPassword ? "text" : "password"}
-                value={form.password}
-                onChange={setField("password")}
-                error={fieldErrors.password}
-                icon={<Lock size={15} />}
-                placeholder={isLogin ? "Your password" : "Min. 8 chars + 1 number"}
-                autoComplete={isLogin ? "current-password" : "new-password"}
-                index={2}
-                rightElement={
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((v) => !v)}
-                    className="text-slate-500 hover:text-slate-300 transition-colors"
-                    aria-label={showPassword ? "Hide password" : "Show password"}
-                  >
-                    {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-                  </button>
-                }
-              />
+              {/* Password inputs — only rendered in login and signup mode */}
+              {mode !== "forgot" && (
+                <>
+                  <InputField
+                    id="password"
+                    label="Password"
+                    type={showPassword ? "text" : "password"}
+                    value={form.password}
+                    onChange={setField("password")}
+                    error={fieldErrors.password}
+                    icon={<Lock size={15} />}
+                    placeholder={isLogin ? "Your password" : "Min. 8 chars + 1 number"}
+                    autoComplete={isLogin ? "current-password" : "new-password"}
+                    index={2}
+                    rightElement={
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((v) => !v)}
+                        className="text-slate-500 hover:text-slate-300 transition-colors"
+                        aria-label={showPassword ? "Hide password" : "Show password"}
+                      >
+                        {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    }
+                  />
 
-              {/* Confirm password — signup only */}
-              <AnimatePresence>
-                {!isLogin && (
-                  <motion.div
-                    key="confirmPassword"
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.3, delay: 0.05 }}
-                  >
-                    <InputField
-                      id="confirmPassword"
-                      label="Confirm Password"
-                      type={showConfirm ? "text" : "password"}
-                      value={form.confirmPassword}
-                      onChange={setField("confirmPassword")}
-                      error={fieldErrors.confirmPassword}
-                      icon={<Lock size={15} />}
-                      placeholder="Repeat your password"
-                      autoComplete="new-password"
-                      index={3}
-                      rightElement={
-                        <button
-                          type="button"
-                          onClick={() => setShowConfirm((v) => !v)}
-                          className="text-slate-500 hover:text-slate-300 transition-colors"
-                          aria-label={showConfirm ? "Hide" : "Show"}
-                        >
-                          {showConfirm ? (
-                            <EyeOff size={15} />
-                          ) : (
-                            <Eye size={15} />
-                          )}
-                        </button>
-                      }
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  {/* Confirm password — signup only */}
+                  <AnimatePresence>
+                    {!isLogin && (
+                      <motion.div
+                        key="confirmPassword"
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.3, delay: 0.05 }}
+                      >
+                        <InputField
+                          id="confirmPassword"
+                          label="Confirm Password"
+                          type={showConfirm ? "text" : "password"}
+                          value={form.confirmPassword}
+                          onChange={setField("confirmPassword")}
+                          error={fieldErrors.confirmPassword}
+                          icon={<Lock size={15} />}
+                          placeholder="Repeat your password"
+                          autoComplete="new-password"
+                          index={3}
+                          rightElement={
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirm((v) => !v)}
+                              className="text-slate-500 hover:text-slate-300 transition-colors"
+                              aria-label={showConfirm ? "Hide" : "Show"}
+                            >
+                              {showConfirm ? (
+                                <EyeOff size={15} />
+                              ) : (
+                                <Eye size={15} />
+                              )}
+                            </button>
+                          }
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
-              {/* Forgot password — login only */}
-              {isLogin && (
-                <div className="flex justify-end -mt-1">
-                  <button
-                    type="button"
-                    className="text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
+                  {/* Forgot password — login only */}
+                  {isLogin && (
+                    <div className="flex justify-end -mt-1">
+                      <button
+                        type="button"
+                        onClick={() => switchMode("forgot")}
+                        className="text-xs text-blue-400 hover:text-blue-300 font-medium transition-colors"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Global error banner */}
@@ -531,17 +597,25 @@ function AuthForm() {
               {/* Submit */}
               <button
                 type="submit"
-                disabled={loading || !!successMessage}
+                disabled={loading || (mode === "forgot" && !!successMessage)}
                 className="glow-btn w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-white text-sm mt-2 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none"
               >
                 {loading ? (
                   <>
                     <Loader2 size={16} className="animate-spin" />
-                    {isLogin ? "Signing in…" : "Creating account…"}
+                    {mode === "forgot"
+                      ? "Sending reset link…"
+                      : isLogin
+                      ? "Signing in…"
+                      : "Creating account…"}
                   </>
                 ) : (
                   <>
-                    {isLogin ? "Sign In" : "Create Account"}
+                    {mode === "forgot"
+                      ? "Send Reset Link"
+                      : isLogin
+                      ? "Sign In"
+                      : "Create Account"}
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -549,19 +623,32 @@ function AuthForm() {
             </form>
 
             {/* ── Switch mode ── */}
-            <p className="text-center text-sm text-slate-400 mt-6">
-              {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
-              <button
-                type="button"
-                onClick={() => switchMode(isLogin ? "signup" : "login")}
-                className="text-blue-400 hover:text-blue-300 font-semibold transition-colors"
-              >
-                {isLogin ? "Sign up free" : "Log in"}
-              </button>
-            </p>
+            {mode === "forgot" ? (
+              <p className="text-center text-sm text-slate-400 mt-6">
+                Remember your password?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("login")}
+                  className="text-blue-400 hover:text-blue-300 font-semibold transition-colors"
+                >
+                  Back to sign in
+                </button>
+              </p>
+            ) : (
+              <p className="text-center text-sm text-slate-400 mt-6">
+                {isLogin ? "Don't have an account?" : "Already have an account?"}{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode(isLogin ? "signup" : "login")}
+                  className="text-blue-400 hover:text-blue-300 font-semibold transition-colors"
+                >
+                  {isLogin ? "Sign up free" : "Log in"}
+                </button>
+              </p>
+            )}
 
             {/* Terms */}
-            {!isLogin && (
+            {mode === "signup" && (
               <p className="text-center text-xs text-slate-600 mt-4">
                 By creating an account you agree to our{" "}
                 <span className="text-slate-500 cursor-pointer hover:text-slate-400">
